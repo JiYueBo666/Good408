@@ -1,0 +1,150 @@
+import os
+import gc
+import torch
+from magic_pdf.data.data_reader_writer import FileBasedDataWriter, FileBasedDataReader
+from magic_pdf.data.dataset import PymuDocDataset
+from magic_pdf.model.doc_analyze_by_custom_model import doc_analyze
+from magic_pdf.config.enums import SupportedPdfParseMethod
+
+
+def process_single_pdf(
+    pdf_file_name, local_image_dir="output/md", local_md_dir="output"
+):
+    try:
+        # 获取文件名，不包含后缀
+        name_without_suff = pdf_file_name.split(".")[0]
+        print(f"Processing: {name_without_suff}")
+
+        # 创建输出目录
+        os.makedirs(local_image_dir, exist_ok=True)
+
+        image_writer = FileBasedDataWriter(local_image_dir)
+        md_writer = FileBasedDataWriter(local_md_dir)
+
+        # 读取PDF内容
+        reader = FileBasedDataReader("")
+        pdf_bytes = reader.read(pdf_file_name)
+        print(f"PDF size: {len(pdf_bytes)} bytes")
+
+        # 创建数据集实例并进行分类
+        ds = PymuDocDataset(pdf_bytes)
+
+        # 清理不需要的变量
+        del pdf_bytes
+        gc.collect()
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        pipe_result = None
+        try:
+            if ds.classify() == SupportedPdfParseMethod.OCR:
+                # 进行OCR处理
+                infer_result = ds.apply(doc_analyze, ocr=True)
+                pipe_result = infer_result.pipe_ocr_mode(image_writer)
+
+            file_name = pdf_file_name.split("\\")[-1][:-4]
+
+            if pipe_result:
+                # 导出处理结果
+                pipe_result.dump_md(md_writer, f"{file_name}.md", local_md_dir)
+        except Exception as e:
+            print(f"Error processing PDF content: {str(e)}")
+            return False
+
+        # 清理内存
+        del ds
+        del pipe_result
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        return True
+
+    except Exception as e:
+        print(f"Error processing file {pdf_file_name}: {str(e)}")
+        return False
+
+
+def split_big2small(pdf_path, output_path="./MetaData/SmallData"):
+    """
+    pdf太大会爆存，切分成小块多次处理
+    """
+    import fitz
+
+    doc = fitz.open(pdf_path)
+
+    # 获取目录
+    toc = doc.get_toc()
+    print("目录：")
+    for level, title, page in toc:
+        print(f"{'-' * (level-1)} {title} starts at page {page}")
+
+    # 遍历目录，按照顶级目录处理PDF
+    prev_page = 0
+    part_number = 1
+    for i, (_, _, page) in enumerate(toc):
+        if i == len(doc) - 1:  # 如果是最后一个项目，则切到最后一页
+            end_page = doc.page_count
+        else:
+            end_page = toc[i + i][2] - 1
+
+        new_doc = fitz.open()
+        new_doc.insert_pdf(doc, from_page=prev_page - 1, to_page=end_page - 1)
+
+        name = pdf_path.split("\\")[-1][:-4]
+
+        output_filename = f"{output_path}/{name}{part_number}.pdf"
+        if not os.path.exists(output_filename):
+            os.makedirs(output_filename)
+        new_doc.save(output_filename)
+        new_doc.close()
+
+        print(f"output to folder : {output_filename}")
+
+
+def main():
+    from pathlib import Path
+
+    # 获取当前文件所在目录的父目录
+    current_file_path = Path(__file__)
+    parent_dir = current_file_path.parent.parent
+
+    # 构造MetaData/SmallData路径
+    data_folder = parent_dir / "MetaData" / "SmallData"
+    # 确保目录存在
+    if data_folder.exists() and data_folder.is_dir():
+        # 获取文件夹中所有文件的路径，并添加到wait_list列表中
+        wait_list = [
+            str(file_path) for file_path in data_folder.iterdir() if file_path.is_file()
+        ]
+    else:
+        print(f"The directory {data_folder} does not exist or is not a directory.")
+        wait_list = []
+
+    print(f"Files to process: {wait_list}")
+    for pdf_file in wait_list:
+        # split_big2small(pdf_file)
+
+        if "参考文献" in pdf_file:
+            continue
+
+        print(f"\n{'='*50}")
+
+        print(f"Starting to process: {pdf_file}")
+
+        success = process_single_pdf(pdf_file)
+
+        if not success:
+            print(f"Failed to process: {pdf_file}")
+
+        print(f"{'='*50}\n")
+
+        # 每个文件处理完后清理内存
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+
+if __name__ == "__main__":
+    main()
