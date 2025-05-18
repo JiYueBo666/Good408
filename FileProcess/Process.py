@@ -151,7 +151,7 @@ def main():
 
 class FileProcessManager:
     def __init__(self) -> None:
-        self.filter_words = ["竟成", "习题精编", "真题演练", "答案与解析"]
+        self.filter_words = ["竞成", "习题精编", "真题演练", "答案与解析"]
 
     def remove_filter_words(self, content):
         pattern = "|".join(map(re.escape, self.filter_words))
@@ -160,11 +160,11 @@ class FileProcessManager:
     def pipeline(self, path):
         loader = UnstructuredMarkdownLoader(path)
         data = loader.load()
-
         for i, _ in enumerate(data):
             data[i].page_content = self.remove_practice(data[i].page_content)
             data[i].page_content = self.remove_preface(data[i].page_content)
             data[i].page_content = self.remove_filter_words(data[i].page_content)
+            print(data[i].page_content)
 
     def remove_preface(self, content):
         # 去除前言
@@ -182,7 +182,6 @@ class FileProcessManager:
         match = pattern.search(text)
         if match:
             text = text.replace(match.group(0).strip(), "")
-
         return text
 
 
