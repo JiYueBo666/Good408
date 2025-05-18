@@ -1,10 +1,13 @@
 import os
 import gc
 import torch
+import re
 from magic_pdf.data.data_reader_writer import FileBasedDataWriter, FileBasedDataReader
 from magic_pdf.data.dataset import PymuDocDataset
 from magic_pdf.model.doc_analyze_by_custom_model import doc_analyze
 from magic_pdf.config.enums import SupportedPdfParseMethod
+from langchain_community.document_loaders import UnstructuredMarkdownLoader
+from langchain_core.documents import Document
 
 
 def process_single_pdf(
@@ -146,5 +149,45 @@ def main():
             torch.cuda.empty_cache()
 
 
+class FileProcessManager:
+    def __init__(self) -> None:
+        self.filter_words = ["竟成", "习题精编", "真题演练", "答案与解析"]
+
+    def remove_filter_words(self, content):
+        pattern = "|".join(map(re.escape, self.filter_words))
+        return re.sub(pattern, "", content)
+
+    def pipeline(self, path):
+        loader = UnstructuredMarkdownLoader(path)
+        data = loader.load()
+
+        for i, _ in enumerate(data):
+            data[i].page_content = self.remove_practice(data[i].page_content)
+            data[i].page_content = self.remove_preface(data[i].page_content)
+            data[i].page_content = self.remove_filter_words(data[i].page_content)
+
+    def remove_preface(self, content):
+        # 去除前言
+        pattern = r"前言.*?目录"
+        # 将匹配到的部分替换为空字符串，从而移除这部分内容
+        result, _ = re.subn(pattern, "", content, flags=re.DOTALL)
+        return result
+
+    def remove_practice(self, text):
+        pattern = re.compile(
+            r"(\d+(?:\.\d+)+习题精编.*?)(?=\n\d+(?:\.\d+)+(?!.*(?:真题演练|答案与解析)).*$)",
+            re.DOTALL | re.MULTILINE,
+        )
+
+        match = pattern.search(text)
+        if match:
+            text = text.replace(match.group(0).strip(), "")
+
+        return text
+
+
 if __name__ == "__main__":
-    main()
+    path = "D:\AIProject\Good408\output\操作系统_ch1_1 操作系统概述.md"
+
+    manager = FileProcessManager()
+    manager.pipeline(path)
