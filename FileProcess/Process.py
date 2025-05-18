@@ -8,6 +8,13 @@ from magic_pdf.model.doc_analyze_by_custom_model import doc_analyze
 from magic_pdf.config.enums import SupportedPdfParseMethod
 from langchain_community.document_loaders import UnstructuredMarkdownLoader
 from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from Embedding import get_embedding_model
+import faiss
+from langchain_community.docstore.in_memory import InMemoryDocstore
+from langchain_community.vectorstores import FAISS
+
+from uuid import uuid4
 
 
 def process_single_pdf(
@@ -141,8 +148,6 @@ def main():
         if not success:
             print(f"Failed to process: {pdf_file}")
 
-        print(f"{'='*50}\n")
-
         # 每个文件处理完后清理内存
         gc.collect()
         if torch.cuda.is_available():
@@ -164,7 +169,9 @@ class FileProcessManager:
             data[i].page_content = self.remove_practice(data[i].page_content)
             data[i].page_content = self.remove_preface(data[i].page_content)
             data[i].page_content = self.remove_filter_words(data[i].page_content)
-            print(data[i].page_content)
+        split_docs = self.split_docs(data)
+
+        return split_docs
 
     def remove_preface(self, content):
         # 去除前言
@@ -184,9 +191,45 @@ class FileProcessManager:
             text = text.replace(match.group(0).strip(), "")
         return text
 
+    def split_docs(self, doc):
+        chunk_size = 500
+        overlap_size = 50
+
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size, chunk_overlap=overlap_size
+        )
+
+        split_docs = text_splitter.split_documents(doc)
+        return split_docs
+
 
 if __name__ == "__main__":
     path = "D:\AIProject\Good408\output\操作系统_ch1_1 操作系统概述.md"
 
     manager = FileProcessManager()
-    manager.pipeline(path)
+    docs = manager.pipeline(path)
+
+    embedding_model = get_embedding_model()
+
+    index = faiss.IndexFlatL2(len(embedding_model.embed_query("测试")))
+
+    vector_store = FAISS(
+        embedding_function=embedding_model,
+        index=index,
+        docstore=InMemoryDocstore(),
+        index_to_docstore_id={},
+    )
+    uuids = [str(uuid4()) for _ in range(len(docs))]
+
+    # vector_store.add_documents(documents=docs, ids=uuids)
+
+    # vector_store.save_local("./faiss_index")
+
+    new_vector_store = FAISS.load_local(
+        "./faiss_index", embedding_model, allow_dangerous_deserialization=True
+    )
+
+    docs = new_vector_store.similarity_search("2.系统调用与库函数调用的区别？")
+    print("搜索结果")
+    for i, d in enumerate(docs):
+        print(i, "---", d.page_content)
