@@ -1,0 +1,36 @@
+# 环境变量文件
+.env
+.pdf
+MetaData/*.pdf
+.jpg
+.png
+.md
+# Python缓存文件
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 虚拟环境
+venv/
+env/
+.venv/
+.env/
+
+# IDE配置文件
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 日志文件
+*.log
+
+# 本地配置文件
+config.local.yaml
+
+./MetaData/*.pdf
+
+
+# 忽略输出目录
+./output/
+./output/images/ 
