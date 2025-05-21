@@ -3,6 +3,7 @@ import gc
 import torch
 import re
 from typing import List
+from pathlib import Path
 from langchain.schema import Document
 from magic_pdf.data.data_reader_writer import FileBasedDataWriter, FileBasedDataReader
 from magic_pdf.data.dataset import PymuDocDataset
@@ -234,33 +235,77 @@ class FileProcessManager:
         return split_docs
 
 
-if __name__ == "__main__":
-    path = "D:\AIProject\Good408\output\操作系统_ch1_1 操作系统概述.md"
+# if __name__ == "__main__":
 
-    # manager = FileProcessManager()
-    # docs = manager.pipeline(path)
+#     # 创建path_list存储所有markdown文件路径
+#     path_list = []
 
-    # embedding_model = get_embedding_model()
+#     # 获取当前文件所在目录的父目录
+#     current_file_path = Path(__file__)
+#     parent_dir = current_file_path.parent.parent
 
-    # index = faiss.IndexFlatL2(len(embedding_model.embed_query("测试")))
+#     # 构造output路径
+#     output_folder = parent_dir / "output"
 
-    # vector_store = FAISS(
-    #     embedding_function=embedding_model,
-    #     index=index,
-    #     docstore=InMemoryDocstore(),
-    #     index_to_docstore_id={},
+#     # 确保目录存在
+#     if output_folder.exists() and output_folder.is_dir():
+#         # 获取文件夹中所有markdown文件的路径，并添加到path_list列表中
+#         path_list = [
+#             str(file_path)
+#             for file_path in output_folder.iterdir()
+#             if file_path.is_file() and file_path.suffix.lower() == ".md"
+#         ]
+#     else:
+#         print(f"输出目录 {output_folder} 不存在或不是一个目录。")
+
+#     # 导入tqdm库
+#     from tqdm import tqdm
+    
+#     manager = FileProcessManager()
+#     docs=[]
+    
+#     print(f"找到{len(path_list)}个Markdown文件，开始处理...")
+    
+#     # 使用tqdm包装path_list，显示处理进度
+#     for path in tqdm(path_list, desc="处理Markdown文件", unit="文件"):
+#         doc_current = manager.pipeline(path)
+#         docs.extend(doc_current)
+    
+#     print(f"共处理了{len(docs)}个文档片段")
+    
+#     embedding_model = get_embedding_model()
+    
+#     index = faiss.IndexFlatL2(len(embedding_model.embed_query("测试")))
+    
+#     vector_store = FAISS(
+#         embedding_function=embedding_model,
+#         index=index,
+#         docstore=InMemoryDocstore(),
+#         index_to_docstore_id={},
+#     )
+#     uuids = [str(uuid4()) for _ in range(len(docs))]
+    
+#     # 使用tqdm显示向量存储添加文档的进度
+#     print("开始构建FAISS索引...")
+    
+#     # 批量处理文档以提高效率
+#     batch_size = 100  # 可以根据实际情况调整批量大小
+#     total_batches = (len(docs) + batch_size - 1) // batch_size
+    
+#     for i in tqdm(range(0, len(docs), batch_size), desc="构建FAISS索引", total=total_batches, unit="批次"):
+#         batch_docs = docs[i:i+batch_size]
+#         batch_uuids = uuids[i:i+batch_size]
+#         vector_store.add_documents(documents=batch_docs, ids=batch_uuids)
+    
+#     print("FAISS索引构建完成，正在保存...")
+#     vector_store.save_local("./faiss_index")
+#     print("索引已保存到 ./faiss_index")
+
+    # new_vector_store = FAISS.load_local(
+    #     "./faiss_index", embedding_model, allow_dangerous_deserialization=True
     # )
-    # uuids = [str(uuid4()) for _ in range(len(docs))]
 
-    # vector_store.add_documents(documents=docs, ids=uuids)
-
-    # vector_store.save_local("./faiss_index")
-
-    new_vector_store = FAISS.load_local(
-        "./faiss_index", embedding_model, allow_dangerous_deserialization=True
-    )
-
-    docs = new_vector_store.similarity_search("系统调用与库函数调用有什么区别？")
-    for i, d in enumerate(docs):
-        print(f" 搜索结果 {i} , 文档： {d.page_content}")
-        print()
+    # docs = new_vector_store.similarity_search("系统调用与库函数调用有什么区别？")
+    # for i, d in enumerate(docs):
+    #     print(f" 搜索结果 {i} , 文档： {d.page_content}")
+    #     print()
