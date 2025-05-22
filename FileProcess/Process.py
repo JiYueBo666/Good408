@@ -1,5 +1,7 @@
 import os
 import gc
+import pickle
+import numpy as np
 import torch
 import re
 from typing import List
@@ -18,6 +20,8 @@ from langchain_community.vectorstores import FAISS
 from uuid import uuid4
 from Embedding import get_embedding_model
 import logging
+from rank_bm25 import BM25Okapi
+import jieba
 
 logging.basicConfig(
     level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -235,77 +239,190 @@ class FileProcessManager:
         return split_docs
 
 
-# if __name__ == "__main__":
+class BM25Manager:
+    def __init__(self):
+        self.bm25_index = None
+        self.doc_mapping = {}  # 映射BM25索引到文档ID
+        self.tokenizer_corpus = []
+        self.raw_corpus = []
 
-#     # 创建path_list存储所有markdown文件路径
-#     path_list = []
+    def build_index(self, documents: List[Document], doc_ids):
+        """
+        构建BM25索引
+        """
 
-#     # 获取当前文件所在目录的父目录
-#     current_file_path = Path(__file__)
-#     parent_dir = current_file_path.parent.parent
+        self.raw_corpus = documents
+        self.doc_mapping = {i: doc_id for i, doc_id in enumerate(doc_ids)}
 
-#     # 构造output路径
-#     output_folder = parent_dir / "output"
+        # 分词
+        for doc in documents:
+            tokens = list(jieba.cut(doc.page_content))
+            self.tokenizer_corpus.append(tokens)
+        self.bm25_index = BM25Okapi(self.tokenizer_corpus)
+        return True
 
-#     # 确保目录存在
-#     if output_folder.exists() and output_folder.is_dir():
-#         # 获取文件夹中所有markdown文件的路径，并添加到path_list列表中
-#         path_list = [
-#             str(file_path)
-#             for file_path in output_folder.iterdir()
-#             if file_path.is_file() and file_path.suffix.lower() == ".md"
-#         ]
-#     else:
-#         print(f"输出目录 {output_folder} 不存在或不是一个目录。")
+    def search(self, query, top_k=5):
+        if not self.bm25_index:
+            return []
 
-#     # 导入tqdm库
-#     from tqdm import tqdm
-    
-#     manager = FileProcessManager()
-#     docs=[]
-    
-#     print(f"找到{len(path_list)}个Markdown文件，开始处理...")
-    
-#     # 使用tqdm包装path_list，显示处理进度
-#     for path in tqdm(path_list, desc="处理Markdown文件", unit="文件"):
-#         doc_current = manager.pipeline(path)
-#         docs.extend(doc_current)
-    
-#     print(f"共处理了{len(docs)}个文档片段")
-    
-#     embedding_model = get_embedding_model()
-    
-#     index = faiss.IndexFlatL2(len(embedding_model.embed_query("测试")))
-    
-#     vector_store = FAISS(
-#         embedding_function=embedding_model,
-#         index=index,
-#         docstore=InMemoryDocstore(),
-#         index_to_docstore_id={},
-#     )
-#     uuids = [str(uuid4()) for _ in range(len(docs))]
-    
-#     # 使用tqdm显示向量存储添加文档的进度
-#     print("开始构建FAISS索引...")
-    
-#     # 批量处理文档以提高效率
-#     batch_size = 100  # 可以根据实际情况调整批量大小
-#     total_batches = (len(docs) + batch_size - 1) // batch_size
-    
-#     for i in tqdm(range(0, len(docs), batch_size), desc="构建FAISS索引", total=total_batches, unit="批次"):
-#         batch_docs = docs[i:i+batch_size]
-#         batch_uuids = uuids[i:i+batch_size]
-#         vector_store.add_documents(documents=batch_docs, ids=batch_uuids)
-    
-#     print("FAISS索引构建完成，正在保存...")
-#     vector_store.save_local("./faiss_index")
-#     print("索引已保存到 ./faiss_index")
+        tokenized_query = list(jieba.cut(query))
+        bm25_scores = self.bm25_index.get_scores(tokenized_query)
+
+        top_indices = np.argsort(bm25_scores)[-top_k:][::-1]
+
+        results = []
+        for idx in top_indices:
+            if bm25_scores[idx] > 0:  # 只返回有相关性的结果
+                results.append(
+                    {
+                        "id": self.doc_mapping[idx],
+                        "score": float(bm25_scores[idx]),
+                        "content": self.raw_corpus[idx].page_content,
+                    }
+                )
+
+        return results
+
+    def save_index(self, file_path: str = "./bm25_index"):
+        """
+        将BM25索引及关联数据保存到指定路径。
+        :param file_path: 文件保存路径。
+        """
+        data_to_save = {
+            "bm25_index": self.bm25_index,
+            "doc_mapping": self.doc_mapping,
+            "tokenizer_corpus": self.tokenizer_corpus,
+            "raw_corpus": self.raw_corpus,
+        }
+
+        with open(file_path, "wb") as f:
+            pickle.dump(data_to_save, f)
+
+        print(f"索引已保存到 {file_path}")
+
+    def clear(self):
+        """清空索引"""
+        self.bm25_index = None
+        self.doc_mapping = {}
+        self.tokenized_corpus = []
+        self.raw_corpus = []
+
+    @staticmethod
+    def load_index(file_path: str = "./bm25_index"):
+        """
+        从指定路径加载BM25索引及相关数据。
+        :param file_path: 文件路径。
+        :return: 返回一个包含所有必要数据的BM25Manager实例。
+        """
+        with open(file_path, "rb") as f:
+            data_loaded = pickle.load(f)
+
+        bm25_manager = BM25Manager()
+        bm25_manager.bm25_index = data_loaded["bm25_index"]
+        bm25_manager.doc_mapping = data_loaded["doc_mapping"]
+        bm25_manager.tokenizer_corpus = data_loaded["tokenizer_corpus"]
+        bm25_manager.raw_corpus = data_loaded["raw_corpus"]
+
+        print(f"索引已从 {file_path} 加载")
+        return bm25_manager
+
+
+faiss_contents_map, faiss_id_order_for_index = {}, []
+
+
+if __name__ == "__main__":
+
+    # 创建path_list存储所有markdown文件路径
+    # path_list = []
+
+    # # 获取当前文件所在目录的父目录
+    # current_file_path = Path(__file__)
+    # parent_dir = current_file_path.parent.parent
+
+    # # 构造output路径
+    # output_folder = parent_dir / "output"
+
+    # # 确保目录存在
+    # if output_folder.exists() and output_folder.is_dir():
+    #     # 获取文件夹中所有markdown文件的路径，并添加到path_list列表中
+    #     path_list = [
+    #         str(file_path)
+    #         for file_path in output_folder.iterdir()
+    #         if file_path.is_file() and file_path.suffix.lower() == ".md"
+    #     ]
+    # else:
+    #     print(f"输出目录 {output_folder} 不存在或不是一个目录。")
+
+    # # 导入tqdm库
+    # from tqdm import tqdm
+
+    # manager = FileProcessManager()
+    # docs = []
+
+    # print(f"找到{len(path_list)}个Markdown文件，开始处理...")
+
+    # # 使用tqdm包装path_list，显示处理进度
+    # for path in tqdm(path_list, desc="处理Markdown文件", unit="文件"):
+    #     doc_current = manager.pipeline(path)
+    #     docs.extend(doc_current)
+
+    # print(f"共处理了{len(docs)}个文档片段")
+
+    # embedding_model = get_embedding_model()
+
+    # index = faiss.IndexFlatL2(len(embedding_model.embed_query("测试")))
+
+    # vector_store = FAISS(
+    #     embedding_function=embedding_model,
+    #     index=index,
+    #     docstore=InMemoryDocstore(),
+    #     index_to_docstore_id={},
+    # )
+    # uuids = [str(uuid4()) for _ in range(len(docs))]
+    # try:
+    #     faiss_id_order_for_index = uuids
+    #     faiss_contents_map = {uuids[i]: document for i, document in enumerate(docs)}
+    #     documents = [
+    #         faiss_contents_map.get(uuid, None) for uuid in faiss_id_order_for_index
+    #     ]
+
+    #     valid_docs_with_ids = [
+    #         (doc_id, doc) for doc_id, doc in zip(faiss_id_order_for_index, documents)
+    #     ]
+    #     final_doc_ids = [item[0] for item in valid_docs_with_ids]
+    #     final_documents = [item[1] for item in valid_docs_with_ids]
+    #     bm25_manager = BM25Manager()
+    #     bm25_manager.build_index(final_documents, final_doc_ids)
+    #     bm25_manager.save_index()
+    # except Exception as e:
+    #     logger.error(f"BM25索引构建失败:{e}")
+    # logger.info("BM25索引构建完成")
+
+    # # 使用tqdm显示向量存储添加文档的进度
+    # print("开始构建FAISS索引...")
+
+    # # 批量处理文档以提高效率
+    # batch_size = 100  # 可以根据实际情况调整批量大小
+    # total_batches = (len(docs) + batch_size - 1) // batch_size
+
+    # for i in tqdm(
+    #     range(0, len(docs), batch_size),
+    #     desc="构建FAISS索引",
+    #     total=total_batches,
+    #     unit="批次",
+    # ):
+    #     batch_docs = docs[i : i + batch_size]
+    #     batch_uuids = uuids[i : i + batch_size]
+    #     vector_store.add_documents(documents=batch_docs, ids=batch_uuids)
+
+    # print("FAISS索引构建完成，正在保存...")
+    # vector_store.save_local("./faiss_index")
+    # print("索引已保存到 ./faiss_index")
 
     # new_vector_store = FAISS.load_local(
     #     "./faiss_index", embedding_model, allow_dangerous_deserialization=True
     # )
 
-    # docs = new_vector_store.similarity_search("系统调用与库函数调用有什么区别？")
-    # for i, d in enumerate(docs):
-    #     print(f" 搜索结果 {i} , 文档： {d.page_content}")
-    #     print()
+    bm25_searcher = BM25Manager().load_index()
+    results = bm25_searcher.search("CPU的构成")
+    print(results)
