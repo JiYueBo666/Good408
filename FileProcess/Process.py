@@ -18,7 +18,7 @@ import faiss
 from langchain_community.docstore.in_memory import InMemoryDocstore
 from langchain_community.vectorstores import FAISS
 from uuid import uuid4
-from Embedding import get_embedding_model
+from FileProcess.Embedding import get_embedding_model
 import logging
 from rank_bm25 import BM25Okapi
 import jieba
@@ -368,7 +368,7 @@ if __name__ == "__main__":
 
     # print(f"共处理了{len(docs)}个文档片段")
 
-    # embedding_model = get_embedding_model()
+    embedding_model = get_embedding_model()
 
     # index = faiss.IndexFlatL2(len(embedding_model.embed_query("测试")))
 
@@ -419,10 +419,11 @@ if __name__ == "__main__":
     # vector_store.save_local("./faiss_index")
     # print("索引已保存到 ./faiss_index")
 
-    # new_vector_store = FAISS.load_local(
-    #     "./faiss_index", embedding_model, allow_dangerous_deserialization=True
-    # )
+    new_vector_store = FAISS.load_local(
+        "./faiss_index", embedding_model, allow_dangerous_deserialization=True
+    )
 
-    bm25_searcher = BM25Manager().load_index()
-    results = bm25_searcher.search("CPU的构成")
-    print(results)
+    r = new_vector_store.similarity_search_with_score("CPU的构成", k=5)
+    # print(r)
+    s = [result[0].id for result in r]
+    print(s)

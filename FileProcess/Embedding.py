@@ -7,6 +7,7 @@ os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 from huggingface_hub import snapshot_download
 import logging
 from transformers import AutoTokenizer, AutoModel
+from sentence_transformers import SentenceTransformer
 from langchain_core.embeddings import Embeddings
 
 logging.basicConfig(
@@ -16,13 +17,13 @@ logger = logging.getLogger(__name__)
 
 parent_dir = Path.cwd().parent
 
-
+# 加载嵌入模型
 try:
-    if os.path.exists("../huggingfaceModel"):
+    if os.path.exists("./huggingface/huggingfaceModel"):
         logger.info("embedding model already exist")
         pass
     else:
-        local_dir = "../huggingfaceModel"
+        local_dir = "./huggingface/huggingfaceModel"
         logger.info(f"ready to download model to path:{local_dir}")
         snapshot_download(
             repo_id="DMetaSoul/Dmeta-embedding-zh",
@@ -35,13 +36,39 @@ try:
 except Exception as e:
     logging.error(e)
 
+sentences = ["This is an example sentence", "Each sentence is converted"]
+
+model = SentenceTransformer("./huggingface/rerankModel")
+embeddings = model.encode(sentences)
+print(embeddings)
+
+
+# 加载重排序模型
+# 加载嵌入模型
+try:
+    if os.path.exists("./huggingface/rerankModel"):
+        logger.info("rerank model already exist")
+        pass
+    else:
+        local_dir = "./huggingface/rerankModel"
+        logger.info(f"ready to download model to path:{local_dir}")
+        snapshot_download(
+            repo_id="sentence-transformers/distiluse-base-multilingual-cased-v2",
+            local_dir=local_dir,
+            proxies={"https": "http://localhost:7890"},
+            max_workers=8,
+        )
+
+        logger.info(f"Model is downloading to {local_dir}")
+except Exception as e:
+    logging.error(e)
 
 _embedding_model = None
 _embedding_model_lock = threading.Lock()
 
 
 class EmbeddingModel(Embeddings):
-    def __init__(self, default_path="../huggingfaceModel"):
+    def __init__(self, default_path="./huggingface/huggingfaceModel"):
         self.default_path = default_path
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(default_path)
@@ -92,7 +119,7 @@ def get_embedding_model():
             if _embedding_model is None:
                 try:
                     _embedding_model = EmbeddingModel(
-                        default_path="../huggingfaceModel"
+                        default_path="./huggingface/huggingfaceModel"
                     )
                     logger.info("Embedding模型加载成功")
                 except Exception as e:
