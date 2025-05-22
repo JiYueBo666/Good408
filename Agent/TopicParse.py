@@ -50,6 +50,7 @@ class TopicUnderstand:
         self.top_k = top_k
         self.init_instance()
         self.parser = JsonOutputParser(pydantic_object=Analysis)
+        logger.info(f"初始化分析模型")
 
     def init_instance(self):
         if self.api_key and self.base_url:
@@ -76,32 +77,39 @@ class TopicUnderstand:
         # key words
         key_words = struct.get("key_words")
 
-        prompt = ChatPromptTemplate.from_template(
-            """
-        You are a learning assistant for the Chinese postgraduate entrance exam 408 (Computer Science Foundation Courses). You will receive a question/problem from the user and a search result excerpted from textbooks. Here are your tasks:
+        search_result_section = "\n".join(
+            [f"{i+1}.{{r{i}}}" for i in range(len(query_to_search))]
+        )
 
-        1.Correlate knowledge points based on the input to construct a knowledge framework.
-        2.Explain concepts in the most accessible way possible, using practical examples to help users understand the underlying computer principles or workflows.
-        3.Expand and derive related knowledge points to deepen comprehension, while ensuring content accuracy.
-        4.Return the response in JSON format.
+        logger.info(f"提示词模板: {search_result_section}")
+
+        # 构建完整 prompt 模板
+        template = f"""
+        You are a learning assistant for the Chinese postgraduate entrance exam 408 (Computer Science Foundation Courses). 
+        You will receive a question/problem from the user and a search result excerpted from textbooks. 
+        Here are your tasks:
+
+        1. Correlate knowledge points based on the input to construct a knowledge framework.
+        2. Explain concepts in the most accessible way possible, using practical examples to help users understand the underlying computer principles or workflows.
+        3. Expand and derive related knowledge points to deepen comprehension, while ensuring content accuracy.
+        4. Return the response in JSON format.
         The JSON should contain three keys:
 
         'struct': Knowledge structure organization, it is a string-type content
-        'analysis': Explanations of knowledge points,it is a string-type content
-        'more': Extended knowledge derivations,it is a string-type content
+        'analysis': Explanations of knowledge points, it is a string-type content
+        'more': Extended knowledge derivations, it is a string-type content
         _________________________
         Textbook search result:
-        1.{r0}
-        2.{r1}
-        3.{r2}
-        4.{r3}
-        5.{r4}
+        {search_result_section}
         —————————————————————————
         User's question/problem:
-        {user_input}
+        {{user_input}}
         —————————————————————————
+
+        Always answer in Chinese!
         """
-        )
+
+        prompt = ChatPromptTemplate.from_template(template)
 
         query_search_result = []
 
@@ -110,10 +118,12 @@ class TopicUnderstand:
             query_search_result.append(search_result)
         chain = prompt | self.llm | self.parser
 
+        number = len(query_to_search)
+
         try:
             result = chain.invoke(
                 {"user_input": content}
-                | {f"r{i}": query_search_result[i] for i in range(5)}
+                | {f"r{i}": query_search_result[i] for i in range(number)}
             )
             logger.info(f"大模型 最终的 回复 {result}")
             return result
@@ -129,6 +139,7 @@ class StructuredAnalysis:
         self.model_name = model_name
         self.parser = JsonOutputParser(pydantic_object=TOPIC)
         self.init_instance()
+        logger.info(f"初始化结构解析模型")
 
     def init_instance(self):
         if self.api_key and self.base_url:
@@ -191,26 +202,26 @@ class StructuredAnalysis:
             return {"error": 1}
 
 
-def main():
-    model = StructuredAnalysis()
-    result = model.analysis(
-        """1.下列关于客户/服务器（C/S）模型的描述，正确的是（）。  
+# def main():
+#     model = StructuredAnalysis()
+#     result = model.analysis(
+#         """1.下列关于客户/服务器（C/S）模型的描述，正确的是（）。
 
-A.客户端需要提前知道服务器的地址，服务器不需要提前知道客户端的地址  
-B.所有程序在进程通信中的客户端与服务器端的地位保持不变  
-C.客户端之间可以直接通信  
-D.服务器面向用户，客户端面向任务   """
-    )
+# A.客户端需要提前知道服务器的地址，服务器不需要提前知道客户端的地址
+# B.所有程序在进程通信中的客户端与服务器端的地位保持不变
+# C.客户端之间可以直接通信
+# D.服务器面向用户，客户端面向任务   """
+#     )
 
-    model2 = TopicUnderstand()
-    result2 = model2.analysis(
-        content="""1.下列关于客户/服务器（C/S）模型的描述，正确的是（）。  
-A.客户端需要提前知道服务器的地址，服务器不需要提前知道客户端的地址  
-B.所有程序在进程通信中的客户端与服务器端的地位保持不变  
-C.客户端之间可以直接通信  
-D.服务器面向用户，客户端面向任务""",
-        struct=result,
-    )
+#     model2 = TopicUnderstand()
+#     result2 = model2.analysis(
+#         content="""1.下列关于客户/服务器（C/S）模型的描述，正确的是（）。
+# A.客户端需要提前知道服务器的地址，服务器不需要提前知道客户端的地址
+# B.所有程序在进程通信中的客户端与服务器端的地位保持不变
+# C.客户端之间可以直接通信
+# D.服务器面向用户，客户端面向任务""",
+#         struct=result,
+#     )
 
 
-main()
+# main()

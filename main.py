@@ -1,105 +1,151 @@
-import os
-import tempfile
 import streamlit as st
+from streamlit_chat import message
+from PIL import Image
 from Agent.OCR import OCRModule
-from Agent.TopicParse import StructuredAnalysis
+from Agent.TopicParse import StructuredAnalysis, TopicUnderstand
+import os
+import logging
+import asyncio
+import nest_asyncio
 
+nest_asyncio.apply()
+
+logging.basicConfig(
+    level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+logging.getLogger("openai").setLevel(logging.ERROR)
+logging.getLogger("httpx").setLevel(logging.ERROR)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+# 设置页面配置
+st.set_page_config(layout="wide")
 
 # 设置页面标题
-st.set_page_config(page_title="EasyAnswer", layout="wide")
+st.title("Good408")
 
-def main():
-    # 页面标题
-    st.title("📝 EasyAnswer")
-    
-    # 侧边栏 - 可选配置
-    with st.sidebar:
-        st.header("配置")
-        # 可选：允许用户输入自己的API密钥
-        use_custom_api = st.checkbox("使用自定义API配置", False)
-        
-        if use_custom_api:
-            api_key = st.text_input("OpenAI API密钥", type="password")
-            base_url = st.text_input("API基础URL", "https://api.openai.com/v1")
-            model_name = st.selectbox(
-                "选择模型",
-                ["gpt-4o", "gpt-4-vision-preview", "gpt-4o-mini"],
-                index=0
-            )
-        else:
-            # 使用环境变量中的配置
-            api_key = None
-            base_url = None
-            model_name = "gpt-4o"
-    
-    # 主界面
-    st.subheader("上传图片提取文字")
-    
-    # 文件上传组件
-    uploaded_file = st.file_uploader("选择一张图片", type=["jpg", "jpeg", "png", "bmp", "webp"])
-    
+# 初始化session state
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "processing" not in st.session_state:
+    st.session_state.processing = False
+if "current_response" not in st.session_state:
+    st.session_state.current_response = ""
+
+# 初始化OCR模块和结构化分析模块
+ocr_module = OCRModule(openai_api_key=None, base_url=None)  # 使用环境变量中的配置
+structured_analysis = StructuredAnalysis(
+    openai_api_key=None, base_url=None
+)  # 使用环境变量中的配置
+
+TopicUnderstander = TopicUnderstand()
+
+# 创建三列布局：对话区(5) - 图片上传区(3) - 分析结果区(4)
+col1, col2, col3 = st.columns([5, 3, 4])
+
+with col1:
+    st.subheader("对话区")
+    # 显示聊天历史
+    chat_container = st.container()
+    with chat_container:
+        for i, msg in enumerate(st.session_state.messages):
+            if msg["role"] == "user":
+                message(msg["content"], is_user=True, key=f"user_{i}")
+            else:
+                message(msg["content"], is_user=False, key=f"assistant_{i}")
+
+        # 显示正在生成的回复
+        if st.session_state.processing:
+            with st.empty():
+                message(st.session_state.current_response, is_user=False, key="current")
+
+    # 用户输入框固定在底部
+    st.text_input(
+        "请输入您的问题：", key="user_input", on_change=lambda: handle_user_input()
+    )
+
+with col2:
+    st.subheader("图片上传")
+    uploaded_file = st.file_uploader("选择一张图片", type=["png", "jpg", "jpeg"])
+
     if uploaded_file is not None:
         # 显示上传的图片
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.image(uploaded_file, caption="上传的图片", use_container_width=True)
-        
-        # 创建临时文件保存上传的图片
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
-            tmp_file.write(uploaded_file.getvalue())
-            temp_path = tmp_file.name
-        
-        # 提取按钮
-        if st.button("提取文字"):
-            # 创建一个占位符
-            spinner_placeholder = st.empty()
-            
-            try:
-                # 第一个操作：提取文字
-                with spinner_placeholder.container():
-                    with st.spinner("正在读题，请稍候..."):
-                        # 初始化OCR模块
-                        ocr = OCRModule(api_key, base_url, model_name)
-                        
-                        # 提取文字
-                        extracted_text = ocr.extract_text_from_image(temp_path)
-                
-                # 第二个操作：分析题目
-                with spinner_placeholder.container():
-                    with st.spinner("正在解析题目结构，请稍候..."):
-                        unstander = StructuredAnalysis(api_key, base_url, model_name)
-                        topic = unstander.analysis(extracted_text)
-                
-                # 显示分析结果
-                st.write(topic)
+        image = Image.open(uploaded_file)
 
-                # 显示结果
-                with col2:
-                    st.subheader("提取结果")
-                    if extracted_text:
-                        st.text_area("提取的文字", extracted_text, height=400)
-                        
-                        # 提供下载选项
-                        st.download_button(
-                            label="下载文本文件",
-                            data=extracted_text,
-                            file_name="extracted_text.txt",
-                            mime="text/plain"
-                        )
-                    else:
-                        st.error("未能提取到文字，请尝试其他图片。")
-            
-            except Exception as e:
-                st.error(f"处理过程中出错: {str(e)}")
-        
-            # 删除临时文件
-            try:
-                os.unlink(temp_path)
-            except:
-                pass
+        # 创建临时文件路径
+        temp_path = os.path.join("temp", uploaded_file.name)
+        os.makedirs("temp", exist_ok=True)
 
-if __name__ == "__main__":
-    main()
+        # 保存上传的文件
+        with open(temp_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+
+        # 添加OCR处理按钮
+        if st.button("开始处理"):
+            st.session_state.processing = True
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
+            # OCR处理
+            status_text.text("正在进行OCR识别...")
+            progress_bar.progress(25)
+            optimized_path = ocr_module.optimize_image_for_ocr(temp_path)
+            progress_bar.progress(50)
+            text = ocr_module.extract_text(optimized_path)
+            progress_bar.progress(75)
+
+            # 结构化分析
+            status_text.text("正在进行结构化分析...")
+            analysis_result = structured_analysis.analysis(text)
+            logger.info(f"结构化解析结果{analysis_result}")
+
+            if "error" not in analysis_result:
+                result = TopicUnderstander.analysis(
+                    content=text, struct=analysis_result
+                )
+                logger.info(f"AI 分析结果 {result}")
+
+                # 更新session state
+                st.session_state.messages.append({"role": "user", "content": text})
+                st.session_state.messages.append(
+                    {"role": "assistant", "content": result["analysis"]}
+                )
+
+                # 更新分析结果
+                st.session_state.current_struct = result["struct"]
+                st.session_state.current_more = result["more"]
+            else:
+                st.error("结构化分析失败")
+
+            progress_bar.progress(100)
+            status_text.text("处理完成！")
+            st.session_state.processing = False
+            st.rerun()
+
+with col3:
+    st.subheader("分析结果")
+
+    # 结构内容
+    struct_container = st.container()
+    with struct_container:
+        st.markdown("### 结构")
+        if "current_struct" in st.session_state:
+            st.write(st.session_state.current_struct)
+
+    # 拓展内容
+    more_container = st.container()
+    with more_container:
+        st.markdown("### 拓展")
+        if "current_more" in st.session_state:
+            st.write(st.session_state.current_more)
 
 
+# 处理用户输入的函数
+def handle_user_input():
+    user_input = st.session_state.user_input
+    if user_input:
+        st.session_state.messages.append({"role": "user", "content": user_input})
+        # 这里添加处理用户输入的逻辑
+        response = "这是一个示例回复"  # 替换为实际的响应逻辑
+        st.session_state.messages.append({"role": "assistant", "content": response})
+        st.session_state.user_input = ""  # 清空输入框
