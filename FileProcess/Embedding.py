@@ -8,6 +8,7 @@ from huggingface_hub import snapshot_download
 import logging
 from transformers import AutoTokenizer, AutoModel
 from sentence_transformers import SentenceTransformer
+from sentence_transformers import CrossEncoder
 from langchain_core.embeddings import Embeddings
 
 logging.basicConfig(
@@ -35,12 +36,6 @@ try:
         logger.info(f"Model is downloading to {local_dir}")
 except Exception as e:
     logging.error(e)
-
-sentences = ["This is an example sentence", "Each sentence is converted"]
-
-model = SentenceTransformer("./huggingface/rerankModel")
-embeddings = model.encode(sentences)
-print(embeddings)
 
 
 # 加载重排序模型
@@ -111,6 +106,11 @@ class EmbeddingModel(Embeddings):
         return [self.embed_query(text) for text in texts]
 
 
+class RerankModel:
+    def __init__(self):
+        pass
+
+
 def get_embedding_model():
     """延迟加载嵌入模型"""
     global _embedding_model
@@ -126,3 +126,21 @@ def get_embedding_model():
                     logger.error(f"加载Embedding模型失败: {str(e)}")
                     _embedding_model = None
     return _embedding_model
+
+
+_rerank_model = None
+_rerank_model_lock = threading.Lock()
+
+
+def get_rerank_model():
+    global _rerank_model
+    if _rerank_model is None:
+        with _rerank_model_lock:
+            if _rerank_model is None:
+                try:
+                    _rerank_model = CrossEncoder("./huggingface/rerankModel")
+                    logger.info("Embedding模型加载成功")
+                except Exception as e:
+                    logger.error(f"加载Embedding模型失败: {str(e)}")
+                    _rerank_model = None
+    return _rerank_model

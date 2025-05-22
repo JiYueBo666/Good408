@@ -1,11 +1,18 @@
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
+from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field
+
 import logging
-import json, sys
+import sys
 import os
-from typing import List, AnyStr
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+# 添加到 sys.path
+sys.path.append(parent_dir)
+from typing import List
+from utils import search_query
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
@@ -18,8 +25,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-from utils import lazy_load_faiss
-from FileProcess.Embedding import get_embedding_model
+from utils import timer
 
 
 class TOPIC(BaseModel):
@@ -28,12 +34,22 @@ class TOPIC(BaseModel):
     ger_query: List = Field(description="生成的查询")
 
 
+class Analysis(BaseModel):
+    struct: str = Field(description="知识框架")
+    analysis: str = Field(description="Explanations of knowledge points")
+    more: str = Field(description="扩展")
+
+
 class TopicUnderstand:
-    def __init__(self, openai_api_key=None, base_url=None, model_name="gpt-4o") -> None:
+    def __init__(
+        self, openai_api_key=None, base_url=None, model_name="gpt-4o", top_k=5
+    ) -> None:
         self.api_key = openai_api_key
         self.base_url = base_url
         self.model_name = model_name
+        self.top_k = top_k
         self.init_instance()
+        self.parser = JsonOutputParser(pydantic_object=Analysis)
 
     def init_instance(self):
         if self.api_key and self.base_url:
@@ -49,25 +65,61 @@ class TopicUnderstand:
                 streaming=True,
             )
 
+    @timer
     def analysis(self, content: str, struct: dict):
         """
         分析题目
         """
-        pass
+        # 获取生成的query
+        query_to_search = struct.get("ger_query")
 
-    def faiss_search(self, querys: List[str]):
+        # key words
+        key_words = struct.get("key_words")
 
-        search_result = []
+        prompt = ChatPromptTemplate.from_template(
+            """
+        You are a learning assistant for the Chinese postgraduate entrance exam 408 (Computer Science Foundation Courses). You will receive a question/problem from the user and a search result excerpted from textbooks. Here are your tasks:
 
-        embedding_model = get_embedding_model()
-        faiss_search_engine = lazy_load_faiss(embedding_model=embedding_model)
+        1.Correlate knowledge points based on the input to construct a knowledge framework.
+        2.Explain concepts in the most accessible way possible, using practical examples to help users understand the underlying computer principles or workflows.
+        3.Expand and derive related knowledge points to deepen comprehension, while ensuring content accuracy.
+        4.Return the response in JSON format.
+        The JSON should contain three keys:
 
-        for i, query in enumerate(querys):
-            result = faiss_search_engine.similarity_search(query, k=5)
-            print(result)
-            print()
+        'struct': Knowledge structure organization, it is a string-type content
+        'analysis': Explanations of knowledge points,it is a string-type content
+        'more': Extended knowledge derivations,it is a string-type content
+        _________________________
+        Textbook search result:
+        1.{r0}
+        2.{r1}
+        3.{r2}
+        4.{r3}
+        5.{r4}
+        —————————————————————————
+        User's question/problem:
+        {user_input}
+        —————————————————————————
+        """
+        )
 
-        return faiss_search_engine
+        query_search_result = []
+
+        for query in query_to_search:
+            search_result = search_query(query)[0][1]["content"]
+            query_search_result.append(search_result)
+        chain = prompt | self.llm | self.parser
+
+        try:
+            result = chain.invoke(
+                {"user_input": content}
+                | {f"r{i}": query_search_result[i] for i in range(5)}
+            )
+            logger.info(f"大模型 最终的 回复 {result}")
+            return result
+        except Exception as e:
+            logger.error(f"题目结构解析错误: {e}")
+            return {"error": 1}
 
 
 class StructuredAnalysis:
@@ -133,14 +185,6 @@ class StructuredAnalysis:
         chain = prompt | self.llm | self.parser
         try:
             result = chain.invoke({"topic": topic})
-
-            logger.info(
-                f"""结构化解析完成
-                        科目:{result.get("subject")},
-                        关键词:{result.get("key_words")},
-                        查询：{result.get("ger_query")}
-                        """
-            )
             return result
         except Exception as e:
             logger.error(f"题目结构解析错误: {e}")
@@ -159,7 +203,14 @@ D.服务器面向用户，客户端面向任务   """
     )
 
     model2 = TopicUnderstand()
-    model2.faiss_search(result.get("ger_query"))
+    result2 = model2.analysis(
+        content="""1.下列关于客户/服务器（C/S）模型的描述，正确的是（）。  
+A.客户端需要提前知道服务器的地址，服务器不需要提前知道客户端的地址  
+B.所有程序在进程通信中的客户端与服务器端的地位保持不变  
+C.客户端之间可以直接通信  
+D.服务器面向用户，客户端面向任务""",
+        struct=result,
+    )
 
 
 main()

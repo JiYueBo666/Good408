@@ -9,7 +9,7 @@ from typing import List
 from langchain_community.docstore.in_memory import InMemoryDocstore
 from langchain_community.vectorstores import FAISS
 from uuid import uuid4
-from FileProcess.Embedding import get_embedding_model
+from FileProcess.Embedding import get_embedding_model, get_rerank_model
 import logging
 from FileProcess.Process import BM25Manager
 
@@ -18,10 +18,25 @@ logging.basicConfig(
     level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
-
-
+logging.getLogger("openai").setLevel(logging.ERROR)
+logging.getLogger("httpx").setLevel(logging.ERROR)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 faiss_vector_store = None
 bm25_store = None
+
+
+import time
+
+
+def timer(func):
+    def wrapper(*args, **kwargs):
+        start_time = time.perf_counter()
+        result = func(*args, **kwargs)
+        elapsed_time = time.perf_counter() - start_time
+        print(f"函数 {func.__name__} 执行耗时：{elapsed_time:.9f} 秒")
+        return result
+
+    return wrapper
 
 
 def lazy_load_faiss(embedding_model):
@@ -54,6 +69,7 @@ def lazy_load_bm25():
     return bm25_store
 
 
+@timer
 def search_query(query: str):
     embedding_model = get_embedding_model()
     bm25_store = lazy_load_bm25()
@@ -99,12 +115,14 @@ def search_query(query: str):
             docs_current.append(result_data["content"])
 
     if doc_ids_current:
-        reranked_results=reranked_results()
+        rerank_results = reranked_results(query, docs_current, doc_ids_current)
 
-    return prepared_semantic_results_for_hybrid
+    return rerank_results
 
-def reranked_results(query,docs,doc_ids,method=None,top_k=5):
-    '''
+
+@timer
+def reranked_results(query, docs, doc_ids, method=None, top_k=5):
+    """
     对结果进行重排序
 
     参数：
@@ -112,17 +130,53 @@ def reranked_results(query,docs,doc_ids,method=None,top_k=5):
         docs:文档内容列表
         doc_ids:文档id列表
         method:重排序方法
-    '''
+    """
 
-    #暂时支持一种方法
+    # 暂时支持一种方法
     method = "cross_encoder"
     if method == "cross_encoder":
-        return rerank_with_cross_ender(query, docs, doc_ids, top_k)
-
-def rerank_with_cross_encoder(query,docs,doc_ids,top_k=5):
-    
+        return rerank_with_cross_encoder(query, docs, doc_ids, top_k)
 
 
+def rerank_with_cross_encoder(query, docs, doc_ids, top_k=5):
+    if not docs:
+        return []
+    encoder = get_rerank_model()
+    if encoder is None:
+        logger.warning("rerank encoder is None, skip rerank step")
+        return [
+            (doc_id, {"content": doc, "score": 1.0 - idx / len(docs)})
+            for idx, (doc_id, doc) in enumerate(zip(doc_ids, docs))
+        ]
+
+    cross_input = [[query, doc] for doc in docs]
+
+    try:
+        scores = encoder.predict(cross_input)
+        results = [
+            (
+                doc_id,
+                {
+                    "content": doc,
+                    "score": float(score),
+                },
+            )
+            for doc_id, doc, score in zip(doc_ids, docs, scores)
+        ]
+
+        results = sorted(results, key=lambda x: x[1]["score"], reverse=True)
+
+        logger.info(f"rerank results 过程结束")
+        return results[:top_k]
+    except Exception as e:
+        logger.error(f"rerank with cross_encoder failed: {e}")
+        return [
+            (doc_id, {"content": doc, "score": 1.0 - idx / len(docs)})
+            for idx, (doc_id, doc) in enumerate(zip(doc_ids, docs))
+        ]
+
+
+@timer
 def hybrid_merge(semantic_results, bm25_results, alpha=0.7):
     """
     合并语义搜索和BM25检索结果
@@ -196,10 +250,3 @@ def hybrid_merge(semantic_results, bm25_results, alpha=0.7):
     )
 
     return merged_results
-
-
-def main():
-    search_query("CPU的构成")
-
-
-main()
